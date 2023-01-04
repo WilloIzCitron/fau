@@ -14,6 +14,8 @@ template blit*(shader: Shader, params = meshParams(), body: untyped) =
 
 proc patch*(name: string): Patch {.inline.} = fau.atlas[name]
 
+proc patch*(name: string, notFound: string): Patch {.inline.} = fau.atlas.patches.getOrDefault(name, fau.atlas[notFound])
+
 proc patch9*(name: string): Patch9 {.inline.} = fau.atlas.patches9.getOrDefault(name, fau.atlas.error9)
 
 template patchConst*(name: string): Patch =
@@ -154,8 +156,6 @@ proc drawVert*(texture: Texture, vertices: array[4, Vert2], z: float32 = 0, blen
 
 proc draw*(p: Patch9, pos: Vec2, size: Vec2, z: float32 = 0f, color = colorWhite, mixColor = colorClear, scale = 1f, blend = blendNormal) =
   let
-    midx = p.width - p.left - p.right
-    midy = p.height - p.top - p.bot
     x = pos.x
     y = pos.y
     width = size.x
@@ -184,6 +184,9 @@ proc draw*(p: Patch9, pos: Vec2, size: Vec2, z: float32 = 0f, color = colorWhite
 
 proc draw*(p: Patch9, bounds: Rect, z: float32 = 0f, color = colorWhite, mixColor = colorClear, scale = 1f, blend = blendNormal) =
   draw(p, bounds.pos, bounds.size, z, color, mixColor, scale, blend = blend)
+
+proc drawBlit*(buffer: Framebuffer, color = colorWhite, blend = blendNormal) =
+  draw(buffer.texture, fau.cam.pos, fau.cam.size * vec2(1f, -1f), color = color, blend = blend)
 
 #TODO does not support mid != 0
 #TODO divs could just be a single float value, arrays unnecessary
