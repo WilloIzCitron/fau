@@ -37,11 +37,6 @@ type Vec2* = object
 type Vec3* = object
   x*, y*, z*: float32
 
-#used for dynamically updating springy things
-type Spring* = object
-  value*, target*, velocity*: float32
-  damping*, frequency*: float32
-
 #TODO xywh can be vec2s, maybe?
 type Rect* = object
   x*, y*, w*, h*: float32
@@ -82,65 +77,17 @@ func powout*(a, power: float32): float32 {.inline.} =
   result = pow(a - 1, power) * (if power mod 2 == 0: -1 else: 1) + 1
   if isNan(result): result = 0f
 
-func elasticDouble*(alpha: float32, value = 2f, power = 10f, scale = 1f, bounceCount = 7): float32 =
-  var a = alpha
-  let bounces = bounceCount * PI * (if bounceCount mod 2 == 0: 1f else: -1f)
-
-  if a <= 0.5f:
-    a *= 2
-    return pow(value, power * (a - 1f)) * sin(a * bounces.float32) * scale / 2;
-  
-  a = 1f - a
-  a *= 2f;
-  return 1f - pow(value, power * (a - 1f)) * sin((a) * bounces.float32) * scale / 2;
-
-func elasticIn*(alpha: float32, value = 2f, power = 10f, scale = 1f, bounceCount = 6): float32 =
-  let bounces = bounceCount * PI * (if bounceCount mod 2 == 0: 1f else: -1f)
-
-  if alpha >= 0.99f: return 1f
-  return pow(value, power * (alpha - 1)) * sin(alpha * bounces.float32) * scale;
-
-func elasticOut*(alpha: float32, value = 2f, power = 10f, scale = 1f, bounceCount = 7): float32 =
-  var a = alpha
-  let bounces = bounceCount * PI * (if bounceCount mod 2 == 0: 1f else: -1f)
-  if a == 0f: return 0f
-  a = 1f - a
-  return (1f - pow(value, power * (a - 1f)) * sin(a * bounces.float32) * scale);
-
-#spring
-
-func spring*(damping = 0.1f, frequency = 4f, value = 0f, target = 0f): Spring = 
-  Spring(damping: damping, frequency: frequency, value: value, target: target)
-
-proc update*(spring: var Spring, delta: float32) =
-  ## update spring state
-
-  var angularFrequency = spring.frequency
-  angularFrequency *= PI * 2f
-
-  var f = 1.0f + 2.0f * delta * spring.damping * angularFrequency
-  var oo = angularFrequency * angularFrequency
-  var hoo = delta * oo
-  var hhoo = delta * hoo
-  var detInv = 1.0f / (f + hhoo)
-  var detX = f * spring.value + delta * spring.velocity + hhoo * spring.target
-  var detV = spring.velocity + hoo * (spring.target - spring.value)
-  spring.value = detX * detInv
-  spring.velocity = detV * detInv
-
 #utility functions
 
 func zero*(val: float32, margin: float32 = 0.0001f): bool {.inline.} = abs(val) <= margin
 func clamp*(val: float32): float32 {.inline.} = clamp(val, 0f, 1f)
 
 func lerp*(a, b, progress: float32): float32 {.inline.} = a + (b - a) * progress
-func approach*(a, b, progress: float32): float32 {.inline.} = a + (b - a) * clamp(progress)
+func lerpc*(a, b, progress: float32): float32 {.inline.} = a + (b - a) * clamp(progress)
 
 func slope*(value: float32): float32 = 1f - abs(value - 0.5f) * 2f
 
 func inv*(f: float32): float32 {.inline.} = 1f / f
-
-func rev*(f: float32): float32 {.inline.} = 1f - f
 
 ## euclid mod functions (equivalent versions are coming in a future Nim release)
 func emod*(a, b: float32): float32 {.inline.} =
@@ -207,6 +154,7 @@ func asign*(a, b: float32): int =
   let 
     forw = abs(a - b)
     back = 360.0.rad - forw
+    diff = adist(a, b)
   
   return if (a > b) == (back > forw): -1
   else: 1
@@ -316,8 +264,6 @@ func clamp*(vec: var Vec2, min, max: Vec2) =
 func clamp*(vec: var Vec2i, min, max: Vec2i) =
   vec.x = clamp(vec.x, min.x, max.x)
   vec.y = clamp(vec.y, min.y, max.y)
-
-func dot*(vec, other: Vec2): float32 {.inline.} = vec.x * other.x + vec.y * other.y
 
 func floor*(vec: Vec2): Vec2 {.inline.} = vec2(vec.x.floor, vec.y.floor)
 func round*(vec: Vec2, scale = 1f): Vec2 {.inline.} = vec2(vec.x.round(scale), vec.y.round(scale))
@@ -538,7 +484,7 @@ proc contains*(r: Rect, pos: Vec2): bool {.inline.} = r.contains(pos.x, pos.y)
 
 proc overlaps*(a, b: Rect): bool = a.x < b.x + b.w and a.x + a.w > b.x and a.y < b.y + b.h and a.y + a.h > b.y
 
-proc overlaps*(r1: Rect, v1: Vec2, r2: Rect, v2: Vec2, hitPos: var Vec2): bool =
+proc overlaps(r1: Rect, v1: Vec2, r2: Rect, v2: Vec2, hitPos: var Vec2): bool =
   let vel = v1 - v2
 
   var invEntry, invExit: Vec2

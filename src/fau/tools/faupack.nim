@@ -1,4 +1,4 @@
-import ../g2/packer, os, algorithm, pixie, strformat, tables, math, streams, times, chroma, strutils, ../util/aseprite
+import ../g2/packer, os, algorithm, pixie, strformat, tables, math, streams, times, chroma, strutils
 
 from vmath import nil
 
@@ -24,34 +24,10 @@ proc outline(image: Image, color: ColorRGBA) =
         if found:
           image[x, y] = color
 
-proc getImageSize(file: string): tuple[w: int, h: int] =
-  var bytes: array[24, uint8]
-  var outp: seq[uint8]
 
-  #TODO must be a better way to read an int from a file
-  let f = open(file)
-  discard readBytes(f, bytes, 0, bytes.len)
-  close(f)
-
-  if file.splitFile.ext == ".png":
-    outp = bytes[16..19]
-    reverse(outp)
-    let w = cast[ptr int32](addr outp[0])[]
-    outp = bytes[20..23]
-    reverse(outp)
-    let h = cast[ptr int32](addr outp[0])[]
-    return (w.int, h.int)
-  elif file.splitFile.ext == ".aseprite":
-    outp = bytes[8..9]
-    let w = cast[ptr uint16](addr outp[0])[]
-    outp = bytes[10..11]
-    let h = cast[ptr uint16](addr outp[0])[]
-    return (w.int, h.int)
-
-
-proc packImages(path: string, output: string = "atlas", min = 64, max = 1024, padding = 0, bleeding = 2, verbose = false, silent = false) =
+proc packImages(path: string, output: string = "atlas", min = 64, max = 1024, padding = 0, bleeding = 2, verbose = false, silent = false, outlineFolder = "", outlineColor = "000000") =
   let packer = newPacker(min, min)
-  let blackRgba = rgba(0, 0, 0, 255)
+  let outlineRgba = outlineColor.parseHex.rgba
   var positions = initTable[string, tuple[image: Image, file: string, pos: tuple[x, y: int], splits: array[4, int]]]()
 
   let time = cpuTime()
@@ -88,15 +64,27 @@ proc packImages(path: string, output: string = "atlas", min = 64, max = 1024, pa
 
   type PackEntry = tuple[file: string, size: int]
   var toPack: seq[PackEntry]
+  var bytes: array[24, uint8]
+  var outp: seq[uint8]
 
   #grab and sort files in order of size for more deterministic packing
   for file in walkDirRec(path):
     let split = file.splitFile
-    if split.ext == ".png" or split.ext == ".aseprite":
+    if split.ext == ".png":
 
-      let size = getImageSize(file)
+      #TODO must be a better way to read an int from a file
+      let f = open(file)
+      discard readBytes(f, bytes, 0, bytes.len)
+      close(f)
 
-      toPack.add (file, max(size.w, size.h).int)
+      outp = bytes[16..19]
+      reverse(outp)
+      let w = cast[ptr int32](addr outp[0])[]
+      outp = bytes[20..23]
+      reverse(outp)
+      let h = cast[ptr int32](addr outp[0])[]
+
+      toPack.add (file, max(w, h).int)
 
   toPack.sort do (a, b: PackEntry) -> int: -cmp(a.size, b.size)
 
@@ -138,39 +126,12 @@ proc packImages(path: string, output: string = "atlas", min = 64, max = 1024, pa
 
       #only save the cropped variant.
       packFile(split.name, cropped, [left, right, top, bot])
-    elif split.ext == ".aseprite":
-      let aseFile = readAseFile(file)
-
-      for layer in aseFile.layers:
-        #skip locked layers; I do not want to skip 'invisible' layers for convenience, so locked is used as the flag here instead
-        if layer.kind == alImage and layer.frames.len > 0 and afEditable in layer.flags:
-          #single-layer aseprite files default to file name only
-          let name = if aseFile.layers.len == 1: "" else: layer.name
-
-          let imageName = 
-            if name.len == 0: split.name
-            elif name[0] == '#' or name[0] == '@': layer.name[1..^1] #prefix layer name with @ or # to name it 'raw' without prefix
-            else: split.name & "" & layer.name.capitalizeAscii #otherwise, use camel case concatenation
-
-          for i, frame in layer.frames:
-            #if there is 1 frame, don't add a suffix, otherwise use 0-indexing
-            let frameName = if layer.frames.len == 1: imageName else: imageName & $i
-
-            #copy layer RGBA data into new image
-            let image = newImage(frame.width, frame.height)
-            copyMem(addr image.data[0], addr frame.data[0], frame.width * frame.height * 4)
-            
-            #aseprite layers are "cropped", so each layer needs to have a new image made with the uncropped version
-            let full = newImage(aseFile.width, aseFile.height)
-            full.draw(image, translate(vec2(frame.x.float32, frame.y.float32)))
-
-            if layer.userData == "outline" or layer.userData == "outlined":
-              outline(full, if layer.userColor == 0'u32: blackRgba else: cast[ColorRGBA](layer.userColor))
-
-            packFile(file / frameName, full)
-
     else:
-      packFile(file, readImage(file))
+      let img = readImage(file)
+      if outlineFolder.len != 0 and file.contains(outlineFolder):
+        outline(img, outlineRgba)
+
+      packFile(file, img)
 
 
   #save a white image

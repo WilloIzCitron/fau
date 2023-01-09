@@ -155,7 +155,7 @@ proc newShader*(vertexSource, fragmentSource: string): Shader =
     var atype: GLenum
     var aname: string
     glGetActiveAttrib(program, i.GLuint, alen, asize, atype, aname)
-    let aloc = glGetAttribLocation(program, aname.cstring)
+    let aloc = glGetAttribLocation(program, aname)
 
     result.attributes[aname] = ShaderAttr(name: aname, size: asize, length: alen, gltype: atype, location: aloc)
 

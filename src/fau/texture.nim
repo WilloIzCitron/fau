@@ -98,15 +98,15 @@ proc newTexture*(size: Vec2i = vec2i(1), filter = tfNearest, wrap = twClamp): Te
   glTexParameteri(result.target, GlTextureWrapT, result.vwrap.toGlEnum.GLint)
 
 #load texture from ptr to decoded PNG data
-proc loadTexturePtr*(size: Vec2i, data: pointer, filter = tfNearest, wrap = twClamp): Texture =
-  result = newTexture(filter = filter, wrap = wrap)
+proc loadTexturePtr*(size: Vec2i, data: pointer): Texture =
+  result = newTexture()
 
   result.size = size
   result.load(size, data)
 
 #load texture from bytes
-proc loadTextureBytes*(bytes: string, filter = tfNearest, wrap = twClamp): Texture =
-  result = newTexture(filter = filter, wrap = wrap)
+proc loadTextureBytes*(bytes: string): Texture =
+  result = newTexture()
 
   var
     width, height, channels: int
@@ -116,8 +116,8 @@ proc loadTextureBytes*(bytes: string, filter = tfNearest, wrap = twClamp): Textu
   result.load(vec2i(width, height), addr data[0])
 
 #load texture from path
-proc loadTextureFile*(path: string, filter = tfNearest, wrap = twClamp): Texture = 
-  result = newTexture(filter = filter, wrap = wrap)
+proc loadTextureFile*(path: string): Texture = 
+  result = newTexture()
 
   var
     width, height, channels: int
@@ -126,13 +126,13 @@ proc loadTextureFile*(path: string, filter = tfNearest, wrap = twClamp): Texture
   data = stbi.load(path, width, height, channels, 4)
   result.load(vec2i(width, height), addr data[0])
 
-proc loadTextureAsset*(path: string, filter = tfNearest, wrap = twClamp): Texture =
-  loadTextureBytes(assetRead(path), filter, wrap)
+proc loadTextureAsset*(path: string): Texture =
+  loadTextureBytes(assetRead(path))
 
-proc loadTexture*(path: static[string], filter = tfNearest, wrap = twClamp): Texture =
+proc loadTexture*(path: static[string]): Texture =
   when staticAssets:
-    loadTextureBytes(assetReadStatic(path), filter, wrap)
+    loadTextureBytes(assetReadStatic(path))
   elif defined(Android): #android -> load asset
-    loadTextureBytes(assetRead(path), filter, wrap)
+    loadTextureBytes(assetRead(path))
   else: #load from filesystem
-    loadTextureFile(path.assetFile, filter, wrap)
+    loadTextureFile(path.assetFile)
