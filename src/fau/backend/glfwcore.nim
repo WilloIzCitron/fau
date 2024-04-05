@@ -202,7 +202,6 @@ proc initCore*(loopProc: proc(), initProc: proc() = (proc() = discard), params: 
   if params.depth: windowHint(DEPTH_BITS, 16.cint)
   windowHint(DOUBLEBUFFER, 1)
   windowHint(MAXIMIZED, params.maximize.cint)
-  windowHint(FLOATING, params.floating.cint)
   if params.transparent:
     windowHint(TRANSPARENT_FRAMEBUFFER, 1.cint)
   
@@ -233,7 +232,8 @@ proc initCore*(loopProc: proc(), initProc: proc() = (proc() = discard), params: 
   if not loadGl(getProcAddress, extensionSupported):
     raise Exception.newException("Failed to load OpenGL.")
 
-  echo "Initialized OpenGL v", glVersionMajor, ".", glVersionMinor, " [VAO: ", supportsVertexArrays, "]"
+  echo "VAO support: ", supportsVertexArrays
+  echo "Initialized OpenGL v" & $glVersionMajor & "." & $glVersionMinor
 
   #load window icon if possible
   when assetExistsStatic("icon.png") and not defined(macosx):
@@ -387,18 +387,6 @@ proc initCore*(loopProc: proc(), initProc: proc() = (proc() = discard), params: 
 proc setWindowTitle*(title: string) =
   window.setWindowTitle(title)
 
-proc setWindowDecorated*(decorated: bool) =
-  window.setWindowAttrib(DECORATED, decorated.cint)
-
-proc setWindowFloating*(floating: bool) =
-  window.setWindowAttrib(FLOATING, floating.cint)
-
-proc setClipboardString*(text: string) =
-  window.setClipboardString(text.cstring)
-
-proc getClipboardString*(): string =
-  $window.getClipboardString()
-
 proc setCursor*(cursor: Cursor) =
   window.setCursor(cursor.handle)
 
@@ -428,13 +416,8 @@ proc getWindowSize*(): Vec2i =
   window.getWindowSize(addr w, addr h)
   return vec2i(w.int, h.int)
 
-proc setWindowSize*(size: Vec2i) =
-  window.setWindowSize(size.x.cint, size.y.cint)
-
 proc setVsync*(on: bool) =
   swapInterval(on.cint)
-
-proc isMaximized*(): bool = window.getWindowAttrib(MAXIMIZED).bool
 
 proc isFullscreen*(): bool =
   return window.getWindowMonitor() != nil

@@ -179,16 +179,11 @@ func emod*(a, b: int): int {.inline.} =
 
 func map*(value, min, max, resmin, resmax: float32): float32 = ((value - min) / (max - min)) * (resmax - resmin) + resmin
 
-#assumes value is [0-1]
-func map*(value, resmin, resmax: float32): float32 = resmin + (resmax - resmin) * value
-
 func mapClamp*(value, min, max, resmin, resmax: float32): float32 = clamp(((value - min) / (max - min)) * (resmax - resmin) + resmin, resmin, resmax)
 
 {.push checks: off.}
 
 func round*(value, space: float32): float32 {.inline.} = round(value / space) * space
-
-func floor*(value, space: float32): float32 {.inline.} = floor(value / space) * space
 
 ## hashes an integer to a random positive integer
 func hashInt*(value: int): int {.inline.} =
@@ -292,15 +287,6 @@ func cos*(x, scl, mag: float32): float32 {.inline} = cos(x / scl) * mag
 func absin*(x, scl, mag: float32): float32 {.inline} = ((sin(x / scl) + 1f) / 2f) * mag
 func abcos*(x, scl, mag: float32): float32 {.inline} = ((cos(x / scl) + 1f) / 2f) * mag
 
-func absin*(x: float32): float32 {.inline} = ((sin(x) + 1f) / 2f)
-func abcos*(x: float32): float32 {.inline} = ((cos(x) + 1f) / 2f)
-
-func triangle*(x: float32, phase = 1f, mag = 1f): float32 =
-  (abs((x mod phase * 2) - phase) / phase - 0.5f) * 2f * mag
-
-func abtriangle*(x: float32, phase = 1f, mag = 1f): float32 =
-  (abs((x mod phase * 2) - phase) / phase) * mag
-
 template vec2*(cx, cy: float32): Vec2 = Vec2(x: cx, y: cy)
 template vec2*(cx, cy: int): Vec2 = Vec2(x: cx.float32, y: cy.float32)
 proc vec2*(xy: float32): Vec2 {.inline.} = Vec2(x: xy, y: xy)
@@ -337,7 +323,6 @@ op(Vec2, float32, vec2, `*`, `*=`)
 op(Vec2, float32, vec2, `/`, `/=`)
 
 func `*`*(f: float32, vec: Vec2): Vec2 {.inline.} = vec2(f * vec.x, f * vec.y)
-func `/`*(f: float32, vec: Vec2): Vec2 {.inline.} = vec2(f / vec.x, f / vec.y)
 func `-`*(vec: Vec2): Vec2 {.inline.} = vec2(-vec.x, -vec.y)
 
 opFunc(Vec2, `mod`)
@@ -423,10 +408,7 @@ func rotate*(vec: Vec2i, steps: int): Vec2i =
 
 func len*(vec: Vec2): float32 {.inline.} = sqrt(vec.x * vec.x + vec.y * vec.y)
 func len2*(vec: Vec2): float32 {.inline.} = vec.x * vec.x + vec.y * vec.y
-func `len=`*(vec: var Vec2, b: float32) = 
-  let l = vec.len
-  if l != 0f:
-    vec *= b / l
+func `len=`*(vec: var Vec2, b: float32) = vec *= b / vec.len
 
 func `angle=`*(vec: var Vec2, angle: float32) =
   vec = vec2l(angle, vec.len)
@@ -544,7 +526,7 @@ proc inside*(x, y, w, h: int): bool {.inline.} = x >= 0 and y >= 0 and x < w and
 proc inside*(p: Vec2i, w, h: int): bool {.inline.} = p.x >= 0 and p.y >= 0 and p.x < w and p.y < h
 proc inside*(p: Vec2i, size: Vec2i): bool {.inline.} = p.x >= 0 and p.y >= 0 and p.x < size.x and p.y < size.y
 
-proc raycast*(a, b: Vec2i, checker: proc(pos: Vec2i): bool): tuple[hit: bool, pos: Vec2i] =
+proc raycast*(a, b: Vec2i, checker: proc(pos: Vec2i): bool): bool =
   var
     x = a.x
     y = a.y
@@ -556,8 +538,8 @@ proc raycast*(a, b: Vec2i, checker: proc(pos: Vec2i): bool): tuple[hit: bool, po
     err = dx - dy
   
   while true:
-    if checker(vec2i(x, y)): return (true, vec2i(x, y))
-    if x == b.x and y == b.y: return (false, vec2i())
+    if checker(vec2i(x, y)): return true
+    if x == b.x and y == b.y: return false
     e2 = 2 * err
 
     if e2 > -dy:
@@ -568,12 +550,10 @@ proc raycast*(a, b: Vec2i, checker: proc(pos: Vec2i): bool): tuple[hit: bool, po
       err += dx
       y += sy
 
-  return (false, vec2i())
+  return false
 
-
+#Implementation of bresenham's line algorithm; iterates through a line connecting the two points.
 iterator line*(p1, p2: Vec2i): Vec2i =
-  ## Implementation of bresenham's line algorithm; iterates through a line connecting the two points.
-
   let 
     dx = abs(p2.x - p1.x)
     dy = abs(p2.y - p1.y)
@@ -598,36 +578,6 @@ iterator line*(p1, p2: Vec2i): Vec2i =
     if e2 < dx:
       err += dx
       startY += sy
-
-iterator lineNoDiagonal*(p1, p2: Vec2i): Vec2i =
-  ## Implementation of bresenham's line algorithm; iterates through a line connecting the two points. Non-diagonal version.
-  
-  let 
-    dx = abs(p2.x - p1.x)
-    dy = -abs(p2.y - p1.y)
-    sx = if p1.x < p2.x: 1 else: -1
-    sy = if p1.y < p2.y: 1 else: -1
-
-  var
-    startX = p1.x
-    startY = p1.y
-
-    err = dx + dy
-    e2 = 0
-  
-  yield vec2i(startX, startY)
-  
-  while startX != p2.x or startY != p2.y:
-    e2 = 2 * err
-    
-    if e2 - dy > dx - e2:
-      err += dy
-      startX += sx
-    else:
-      err += dx
-      startY += sy
-
-    yield vec2i(startX, startY)
 
 proc rect*(): Rect {.inline.} = Rect()
 proc rect*(x, y, w, h: float32): Rect {.inline.} = Rect(x: x, y: y, w: w, h: h)
@@ -673,8 +623,6 @@ proc center*(r: Rect): Vec2 {.inline.} = vec2(r.x + r.w/2.0, r.y + r.h/2.0)
 
 proc `-`*(r: Rect, other: Rect): Rect {.inline.} = rect(r.xy - other.xy, r.wh - other.wh)
 proc `+`*(r: Rect, other: Rect): Rect {.inline.} = rect(r.xy + other.xy, r.wh + other.wh)
-
-proc `-`*(r: Rect, pos: Vec2): Rect {.inline.} = rect(r.xy - pos, r.wh)
 proc `+`*(r: Rect, pos: Vec2): Rect {.inline.} = rect(r.xy + pos, r.wh)
 
 proc merge*(r: Rect, other: Rect): Rect =
@@ -791,7 +739,7 @@ proc penetrationY*(a, b: Rect): float32 {.inline.} =
 proc penetration*(a, b: Rect): Vec2 = vec2(penetrationX(a, b), penetrationY(a, b))
 
 #moves a hitbox; may be removed later
-proc moveDelta*(box: Rect, vel: Vec2, solidity: proc(xy: Vec2i): bool, seg = 0.1f): Vec2 = 
+proc moveDelta*(box: Rect, vel: Vec2, solidity: proc(x, y: int): bool, seg = 0.1f): Vec2 = 
   let
     left = (box.x + 0.5).int - 1
     bottom = (box.y + 0.5).int - 1
@@ -809,7 +757,7 @@ proc moveDelta*(box: Rect, vel: Vec2, solidity: proc(xy: Vec2i): bool, seg = 0.1
 
     for dx in left..right:
       for dy in bottom..top:
-        if solidity(vec2i(dx, dy)):
+        if solidity(dx, dy):
           let tile = rect((dx).float32 - 0.5f, (dy).float32 - 0.5f, 1, 1)
           if hitbox.overlaps(tile):
             hitbox.x -= tile.penetrationX(hitbox)
@@ -820,7 +768,7 @@ proc moveDelta*(box: Rect, vel: Vec2, solidity: proc(xy: Vec2i): bool, seg = 0.1
 
     for dx in left..right:
       for dy in bottom..top:
-        if solidity(vec2i(dx, dy)):
+        if solidity(dx, dy):
           let tile = rect((dx).float32 - 0.5f, (dy).float32 - 0.5f, 1, 1)
           if hitbox.overlaps(tile):
             hitbox.y -= tile.penetrationY(hitbox)
@@ -978,7 +926,7 @@ template particlesAngle*(seed: int, amount: int, ppos: Vec2, radius: float32, ro
     body
 
 ## Stateless particles based on RNG. x/y are injected into template body.
-template particlesLifeOffset*(seed: int, amount: int, ppos: Vec2, basefin: float32, radiusFrom, radius: float32, body: untyped) =
+template particlesLife*(seed: int, amount: int, ppos: Vec2, basefin: float32, radius: float32, body: untyped) =
   var r = initRand(seed)
   for i in 0..<amount:
     let
@@ -987,13 +935,10 @@ template particlesLifeOffset*(seed: int, amount: int, ppos: Vec2, basefin: float
       fout {.inject, used.} = 1f - fin
       rot {.inject, used.} = r.rand(360f.rad).float32
       count {.inject, used.} = i
-      v = vec2l(rot, radiusFrom + r.rand(radius * fin))
+      v = vec2l(rot, r.rand(radius * fin))
       pos {.inject.} = ppos + v
     if fin <= 1f:
       body
-
-template particlesLife*(seed: int, amount: int, ppos: Vec2, basefin: float32, radius: float32, body: untyped) =
-  particlesLifeOffset(seed, amount, ppos, basefin, 0f, radius, body)
 
 template circle*(amount: int, body: untyped) =
   for i in 0..<amount:

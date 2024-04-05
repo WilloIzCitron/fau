@@ -1,4 +1,4 @@
-import macros, tables, streams, strutils
+import macros, tables, strutils
 
 # Utility macros, templates & sugar.
 
@@ -18,6 +18,27 @@ template incTimer*(value: untyped, increment: float32, body: untyped): untyped =
   if `value` >= 1f:
     `value` = 0f
     `body`
+
+template findMin*[T](list: seq[T], op: untyped): untyped =
+  var minValue = float32.high
+  var result: T
+  for it {.inject.} in list:
+    let newMin = op
+    if newMin < minValue:
+      minValue = newMin
+      result = it
+  result
+
+template findMin*[T](list: seq[T], op: untyped, predicate: untyped): untyped =
+  var minValue = float32.high
+  var result: T
+  for it {.inject.} in list:
+    if predicate:
+      let newMin = op
+      if newMin < minValue:
+        minValue = newMin
+        result = it
+  result
 
 ## copies an array into a seq, element by element.
 macro minsert*(dest: untyped, index: int, data: untyped): untyped =
@@ -79,17 +100,6 @@ template importAll*(): untyped =
         if split.ext == ".nim" and split.name != filename[0..^5]: result.add ident(split.name)
   
   importAllDef(instantiationInfo().filename)
-
-#https://forum.nim-lang.org/t/9504
-template unroll*(iter, name0, body0: untyped): untyped =
-  macro unrollImpl(name, body) =
-    result = newStmtList()
-    for a in iter:
-      result.add(newBlockStmt(newStmtList(
-        newConstStmt(name, newLit(a)),
-        copy body
-      )))
-  unrollImpl(name0, body0)
 
 #this was kind of a bad idea...
 #[
