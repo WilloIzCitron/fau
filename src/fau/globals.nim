@@ -20,6 +20,23 @@ type KeyCode* = enum
   keyRshift, keyRalt, keyRgui, keyMode, keyUnknown,
   keyMouseLeft, keyMouseMiddle, keyMouseRight
 
+type GamepadAxis* = enum
+  leftX, leftY, rightX, rightY, leftTrigger, rightTrigger
+
+type GamepadAxis2* = enum
+  left, right
+
+type GamepadButton* = enum
+  a, b, x, y, leftBumper, rightBumper, back, start, guide, 
+  leftThumb, rightThumb, dpadUp, dpadRight, dpadDown, dpadLeft
+
+#A game controller.
+type Gamepad* = ref object
+  name*: string
+  index*: int
+  buttons*, buttonsJustDown*, buttonsJustUp*: array[GamepadButton, bool]
+  axes*: array[GamepadAxis, float]
+
 #discriminator for the various types of input events
 type FauEventKind* = enum
   ## any key down/up, including mouse
@@ -33,7 +50,9 @@ type FauEventKind* = enum
   ## window resized
   feResize,
   ## visibility changed (show/hide)
-  feVisible
+  feVisible,
+  # controller connected / disconnected
+  feGamepadChanged
 
 #a generic input event
 type FauEvent* = object
@@ -55,9 +74,12 @@ type FauEvent* = object
     size*: Vec2i
   of feVisible:
     shown*: bool
+  of feGamepadChanged:
+    connected*: bool
+    gamepad*: Gamepad
 
 type FauListener* = proc(e: FauEvent)
-  
+
 #A touch position.
 type Touch* = object
   pos*, delta*, last*: Vec2
@@ -71,6 +93,8 @@ type FauInitParams* = object
   title*: string
   #whether to maximize window at start
   maximize*: bool
+  #always on top
+  floating*: bool
   #whether to use a depth buffer
   depth*: bool
   #whether the window has no border
@@ -80,8 +104,8 @@ type FauInitParams* = object
   #default background clear color
   clearColor*: Color
 
-proc initParams*(size = vec2i(800, 600), title = "frog", maximize = true, depth = false, undecorated = false, transparent = false, clearColor = colorClear): FauInitParams =
-  FauInitParams(size: size, title: title, maximize: maximize, depth: depth, undecorated: undecorated, transparent: transparent, clearColor: clearColor)
+proc initParams*(size = vec2i(800, 600), title = "frog", maximize = true, floating = false, depth = false, undecorated = false, transparent = false, clearColor = colorClear): FauInitParams =
+  FauInitParams(size: size, title: title, maximize: maximize, depth: depth, floating: floating, undecorated: undecorated, transparent: transparent, clearColor: clearColor)
 
 #Hold all the graphics state.
 type FauState* = object
@@ -119,6 +143,8 @@ type FauState* = object
   time*: float32
   #All input listeners
   listeners*: seq[FauListener]
+  #All currently plugged-in gamepads.
+  gamepads*: seq[Gamepad]
 
   #Game window size
   sizei*: Vec2i
@@ -152,10 +178,13 @@ proc addFauListener*(ev: FauListener) =
 #Turns pixel units into world units
 proc px*(val: float32): float32 {.inline.} = val * fau.pixelScl
 
-proc unproject*(matInv: Mat, vec: Vec2): Vec2 = ((vec * 2f) / max(fau.size, vec2(1f)) - 1f) * matInv
-proc project*(mat: Mat, vec: Vec2): Vec2 = fau.size * (vec * mat + 1f) / 2f
+proc unproject*(matInv: Mat, vec: Vec2, viewRect = rect(vec2(), fau.size)): Vec2 = (((vec - viewRect.xy) * 2f) / max(viewRect.size, vec2(1f)) - 1f) * matInv
+proc project*(mat: Mat, vec: Vec2, viewRect = rect(vec2(), fau.size)): Vec2 = viewRect.size * (vec * mat + 1f) / 2f + viewRect.xy
 
-proc unproject*(cam: Cam, vec: Vec2): Vec2 {.inline.} = unproject(cam.inv, vec)
-proc project*(cam: Cam, vec: Vec2): Vec2 {.inline.} = project(cam.mat, vec)
+proc unproject*(cam: Cam, vec: Vec2, viewRect = rect(vec2(), fau.size)): Vec2 {.inline.} = unproject(cam.inv, vec, viewRect)
+proc project*(cam: Cam, vec: Vec2, viewRect = rect(vec2(), fau.size)): Vec2 {.inline.} = project(cam.mat, vec, viewRect)
 
-proc mouseWorld*(fau: FauState): Vec2 {.inline.} = fau.cam.unproject(fau.mouse)
+proc mouseWorld*(fau: FauState): Vec2 {.inline.} = fau.cam.unproject(fau.mouse, fau.cam.screenBounds)
+proc mouseDelta*(fau: FauState): Vec2 {.inline.} = fau.touches[0].delta
+
+proc bounds*(fau: FauState): Rect {.inline.} = rect(0f, 0f, fau.size)

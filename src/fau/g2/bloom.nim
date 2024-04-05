@@ -1,4 +1,4 @@
-import ../mesh, ../framebuffer, ../shader, ../texture, ../fmath, ../color, ../globals, ../draw
+import ../mesh, ../framebuffer, ../shader, ../texture, ../fmath, ../color, ../globals, ../draw, strutils
 
 const screenspace = """
 attribute vec4 a_pos;
@@ -17,10 +17,11 @@ type Bloom* = object
   blurPasses*: int
   scaling*: int
 
-proc newBloom*(scaling: int = 4, passes: int = 1, depth = false): Bloom =
-  result.buffer = newFramebuffer(depth = depth)
-  result.p1 = newFramebuffer()
-  result.p2 = newFramebuffer()
+#note: the colorBlacklist parameter is injected straight into the if-statement for the threshold check.
+proc newBloom*(scaling: int = 4, passes: int = 1, depth = false, alpha = true, colorBlacklist = ""): Bloom =
+  result.buffer = newFramebuffer(depth = depth, filter = tfLinear)
+  result.p1 = newFramebuffer(filter = tfLinear)
+  result.p2 = newFramebuffer(filter = tfLinear)
   result.scaling = scaling
   result.blurPasses = passes
 
@@ -30,18 +31,24 @@ proc newBloom*(scaling: int = 4, passes: int = 1, depth = false): Bloom =
   uniform float u_threshold;
   varying vec2 v_uv;
 
+  bool checkeq(vec3 a, vec3 b){
+    vec3 test = abs(a - b);
+    return (test.r + test.g + test.b) < 0.001;
+  }
+
   void main(){
     vec4 color = texture2D(u_texture, v_uv);
-    if(color.r + color.g + color.b > u_threshold * 3.0){
+    if(color.r + color.g + color.b > u_threshold * 3.0$BLACKLIST$){
       gl_FragColor = color;
     }else{
       gl_FragColor = vec4(0.0);
     }
   }
-  """
+  """.replace("$BLACKLIST$", colorBlacklist)
   )
 
   result.bloom = newShader(screenspace,
+  (if alpha: "#define ALPHA_BLEND\n" else: "") &
   """ 
   uniform lowp sampler2D u_texture0;
   uniform lowp sampler2D u_texture1;
@@ -54,7 +61,11 @@ proc newBloom*(scaling: int = 4, passes: int = 1, depth = false): Bloom =
     vec4 original = texture2D(u_texture0, v_uv) * u_originalIntensity;
     vec4 bloom = texture2D(u_texture1, v_uv) * u_bloomIntensity;
     vec4 combined = original * (vec4(1.0) - bloom) + bloom;
+    #ifdef ALPHA_BLEND
     float mx = min(max(combined.r, max(combined.g, combined.b)), 1.0);
+    #else
+    float mx = 1.0;
+    #endif
     gl_FragColor = vec4(combined.rgb / mx, mx);
   }
 
@@ -114,10 +125,6 @@ proc buffer*(bloom: Bloom, clearColor = colorClear): Framebuffer =
   bloom.buffer.resize(fau.sizei)
   bloom.p1.resize(fau.sizei div bloom.scaling)
   bloom.p2.resize(fau.sizei div bloom.scaling)
-  #TODO would be nice if buffer resizes preserved filters...
-  bloom.buffer.texture.filter = tfLinear
-  bloom.p1.texture.filter = tfLinear
-  bloom.p2.texture.filter = tfLinear
 
   bloom.buffer.clear(clearColor)
   return bloom.buffer

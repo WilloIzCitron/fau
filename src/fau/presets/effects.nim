@@ -1,12 +1,14 @@
 ## components for rendering effects
 
-import ../../ecs, ../util/util, strutils, basic
+import ../../core, ../util/util, basic
+import std/strutils
+import pkg/polymorph
 
 type
   EffectId* = distinct int
   EffectState* = object
     pos*: Vec2
-    time*, lifetime*, rotation*: float32
+    time*, lifetime*, rotation*, size*: float32
     color*: Color
     id*: int
   EffectProc* = proc(e: EffectState)
@@ -15,7 +17,7 @@ registerComponents(defaultComponentOptions):
   type
     Effect* = object
       ide*: EffectId
-      rotation*: float32
+      rotation*, sizef*: float32
       color*: Color
 
 ## Defines several effects. Requires makeEffectsSystem() to be called somewhere to function properly.
@@ -38,8 +40,12 @@ macro defineEffects*(body: untyped) =
     proc rendererNone*(e: EffectState) {.inject.} = discard
 
     onEcsBuilt:
-      proc createEffect*(eid: EffectId, pos: Vec2, rot: float32 = 0, col: Color = colorWhite, life: float32 = 0.2) =
-        discard newEntityWith(Pos(vec: pos), Timed(lifetime: life), Effect(ide: eid, rotation: rot, color: col))
+      proc createEffect*(eid: EffectId, pos: Vec2, rotation: float32 = 0, color: Color = colorWhite, life: float32 = 0.2, size = 0f, parent = NoEntityRef) =
+        if eid.int < 0: return
+
+        let res = newEntityWith(Pos(vec: pos), Timed(lifetime: life), Effect(ide: eid, rotation: rotation, color: color, sizef: size))
+        
+        addParent(res, pos, parent)
 
   let brackets = newNimNode(nnkBracket)
   
@@ -77,8 +83,8 @@ macro defineEffects*(body: untyped) =
         `effectBody`
       
       onEcsBuilt:
-        template `templName`*(pos: Vec2, rot: float32 = 0, col: Color = colorWhite, life: float32 = `lifeVal`) =
-          createEffect(`id`.EffectId, pos, rot, col, life)
+        template `templName`*(pos: Vec2, rotation: float32 = 0, color: Color = colorWhite, life: float32 = `lifeVal`, size = 0f, parent = NoEntityRef) =
+          createEffect(`id`.EffectId, pos, rotation, color, life, size, parent)
     
     brackets.add quote do:
       `procName`.EffectProc
@@ -86,10 +92,13 @@ macro defineEffects*(body: untyped) =
   let count = newLit(1 + body.len)
   
   result.add quote do:
-    const allEffects* {.inject.}: array[`count`, EffectProc] = `brackets`
+    const 
+      allEffects* {.inject.}: array[`count`, EffectProc] = `brackets`
+      effectNone* {.inject.} = -1.EffectId
+      effectIdNone* {.inject.} = effectNone
 
 ## Creates the effect entity system for rendering.
 template makeEffectsSystem*() =
   makeSystem("drawEffects", [Pos, Effect, Timed]):
     all:
-      allEffects[item.effect.ide.int](EffectState(pos: item.pos.vec, time: item.timed.time, lifetime: item.timed.lifetime, color: item.effect.color, rotation: item.effect.rotation, id: item.entity.entityId.int))
+      allEffects[effect.ide.int](EffectState(pos: item.pos.vec, time: timed.time, lifetime: timed.lifetime, color: effect.color, size: effect.sizef, rotation: effect.rotation, id: entity.entityId.int))

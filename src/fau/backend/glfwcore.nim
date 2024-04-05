@@ -1,14 +1,35 @@
-import staticglfw, ../gl/[glad, gltypes, glproc], ../globals, ../fmath, ../assets, stb_image/read as stbi
+import staticglfw, ../gl/[glad, gltypes, glproc], ../globals, ../fmath, ../assets, ../util/util, stb_image/read as stbi
 
 # Mostly complete GLFW backend, based on treeform/staticglfw
 
-var running: bool = true
-var window: Window
+type 
+  CursorObj = object
+    handle: CursorHandle
+  Cursor* = ref CursorObj
+
+var 
+  running: bool = true
+  window: Window
+  windowedRect: (cint, cint, cint, cint) = (0, 0, 480, 320)
+
+proc `=destroy`(cursor: var CursorObj) =
+  if cursor.handle != nil and glInitialized:
+    destroyCursor(cursor.handle)
+    cursor.handle = nil
+
+proc toGLfwImage(img: Img): GlfwImage = GlfwImage(width: img.width.cint, height: img.height.cint, pixels: cstring(cast[string](img.data)))
+
+proc newCursor*(path: static string): Cursor =
+  let 
+    img = loadImg(path)
+    glfwImage = toGlfwImage(img)
+    handle = createCursor(addr glfwImage, (img.width div 2).cint, (img.height div 2).cint)
+  return Cursor(handle: handle)
 
 proc getGlfwWindow*(): Window = window
 
-proc toKeyCode(scancode: cint): KeyCode = 
-  result = case scancode:
+proc toKeyCode(keycode: cint): KeyCode = 
+  result = case keycode:
     of KEY_SPACE: keySpace
     of KEY_APOSTROPHE: keyApostrophe
     of KEY_COMMA: keyComma
@@ -147,18 +168,21 @@ proc fixMouse(x, y: cdouble): Vec2 =
   var
     fwidth: cint
     fheight: cint
+    winwidth: cint
+    winheight: cint
   
   window.getFramebufferSize(addr fwidth, addr fheight)
+  window.getWindowSize(addr winwidth, addr winheight)
 
-  if fau.size.zero or fwidth == 0 or fheight == 0:
+  if winwidth == 0 or winheight == 0 or fwidth == 0 or fheight == 0:
     return vec2()
 
   let
-    sclx = fwidth.float32 / fau.size.x
-    scly = fheight.float32 / fau.size.y
+    sclx = fwidth.float32 / winwidth.float32
+    scly = fheight.float32 / winheight.float32
 
   #scale mouse position by framebuffer size
-  let pos = vec2((x / max(sclx, 1f)).float32, fau.size.y - 1f - (y / max(scly, 1f)).float32)
+  let pos = vec2((x * max(sclx, 1f)).float32, fau.size.y - 1f - (y * max(scly, 1f)).float32)
 
   return pos
 
@@ -178,14 +202,22 @@ proc initCore*(loopProc: proc(), initProc: proc() = (proc() = discard), params: 
   if params.depth: windowHint(DEPTH_BITS, 16.cint)
   windowHint(DOUBLEBUFFER, 1)
   windowHint(MAXIMIZED, params.maximize.cint)
+  windowHint(FLOATING, params.floating.cint)
   if params.transparent:
     windowHint(TRANSPARENT_FRAMEBUFFER, 1.cint)
   
   if params.undecorated:
     windowHint(DECORATED, 0.cint)
 
-  window = createWindow(params.size.x.cint, params.size.y.cint, params.title, nil, nil)
+  if (paramCount() > 0 and paramStr(1) == "-coreProfile") or defined(macosx):
+    windowHint(CONTEXT_VERSION_MAJOR, 3)
+    windowHint(CONTEXT_VERSION_MINOR, 2)
+    windowHint(OPENGL_PROFILE, OPENGL_CORE_PROFILE)
+
+  window = createWindow(params.size.x.cint, params.size.y.cint, params.title.cstring, nil, nil)
   window.makeContextCurrent()
+
+  swapInterval(1)
 
   #center window on primary monitor if it's not maximized
   if not params.maximize:
@@ -198,10 +230,10 @@ proc initCore*(loopProc: proc(), initProc: proc() = (proc() = discard), params: 
       getMonitorPos(monitor, mx.addr, my.addr)
       window.setWindowPos(mx + (mode.width - params.size.x.cint) div 2, my + (mode.height - params.size.y.cint) div 2)
 
-  if not loadGl(getProcAddress):
+  if not loadGl(getProcAddress, extensionSupported):
     raise Exception.newException("Failed to load OpenGL.")
 
-  echo "Initialized OpenGL v" & $glVersionMajor & "." & $glVersionMinor
+  echo "Initialized OpenGL v", glVersionMajor, ".", glVersionMinor, " [VAO: ", supportsVertexArrays, "]"
 
   #load window icon if possible
   when assetExistsStatic("icon.png") and not defined(macosx):
@@ -262,6 +294,21 @@ proc initCore*(loopProc: proc(), initProc: proc() = (proc() = discard), params: 
   discard window.setWindowIconifyCallback(proc(window: Window, iconified: cint) {.cdecl.} =
     fireFauEvent FauEvent(kind: feVisible, shown: iconified.bool)
   )
+  
+  #emscripten does not support the gamepad API https://github.com/emscripten-core/emscripten/issues/20446
+  when not defined(emscripten):
+    discard setJoystickCallback(proc(joy: cint, event: cint) {.cdecl.} =
+      if event == Connected and joystickIsGamepad(joy) != 0:
+        let gamepad = Gamepad(index: joy.int, name: $getGamepadName(joy))
+        fau.gamepads.add(gamepad)
+
+        fireFauEvent FauEvent(kind: feGamepadChanged, connected: true, gamepad: gamepad)
+      elif event == Disconnected:
+        let index = fau.gamepads.findIt(it.index == joy.int)
+        if index != -1:
+          fireFauEvent FauEvent(kind: feGamepadChanged, connected: true, gamepad: fau.gamepads[index])
+          fau.gamepads.delete(index)
+    )
 
   #grab the state at application start
   var 
@@ -280,8 +327,55 @@ proc initCore*(loopProc: proc(), initProc: proc() = (proc() = discard), params: 
   glInitialized = true
   initProc()
 
+  #find existing gamepads at game startup
+  when not defined(emscripten):
+    for i in 0..<8:
+      if joystickPresent(i.cint) != 0 and joystickIsGamepad(i.cint) != 0:
+        let gamepad = Gamepad(index: i.int, name: $getGamepadName(i.cint))
+        fau.gamepads.add(gamepad)
+
+        fireFauEvent FauEvent(kind: feGamepadChanged, connected: true, gamepad: gamepad)
+
   mainLoop(proc() =
     pollEvents()
+
+    #update controller/gamepad state
+    when not defined(emscripten):
+      for pad in fau.gamepads:
+        var state: GamepadState
+        if getGamepadState(pad.index.cint, addr state) != 0:
+          pad.axes[leftX] = state.axes[GamepadAxisLeftX]
+          pad.axes[leftY] = -state.axes[GamepadAxisLeftY]
+          pad.axes[rightX] = state.axes[GamepadAxisRightX]
+          pad.axes[rightY] = -state.axes[GamepadAxisRightY]
+          pad.axes[leftTrigger] = state.axes[GamepadAxisLeftTrigger]
+          pad.axes[rightTrigger] = state.axes[GamepadAxisRightTrigger]
+          
+          var buttons: array[GamepadButton, bool]
+
+          buttons[a] = state.buttons[GamepadButtonA].bool
+          buttons[b] = state.buttons[GamepadButtonB].bool
+          buttons[x] = state.buttons[GamepadButtonX].bool
+          buttons[y] = state.buttons[GamepadButtonY].bool
+
+          buttons[leftBumper] = state.buttons[GamepadButtonLeftBumper].bool
+          buttons[rightBumper] = state.buttons[GamepadButtonRightBumper].bool
+          buttons[back] = state.buttons[GamepadButtonBack].bool
+          buttons[start] = state.buttons[GamepadButtonStart].bool
+          buttons[guide] = state.buttons[GamepadButtonGuide].bool
+          buttons[leftThumb] = state.buttons[GamepadButtonLeftThumb].bool
+          buttons[rightThumb] = state.buttons[GamepadButtonRightThumb].bool
+          buttons[dpadUp] = state.buttons[GamepadButtonDpadUp].bool
+          buttons[dpadRight] = state.buttons[GamepadButtonDpadRight].bool
+          buttons[dpadDown] = state.buttons[GamepadButtonDpadDown].bool
+          buttons[dpadLeft] = state.buttons[GamepadButtonDpadLeft].bool
+        
+          for but in GamepadButton:
+            pad.buttonsJustDown[but] = buttons[but] and not pad.buttons[but]
+            pad.buttonsJustUp[but]= not buttons[but] and pad.buttons[but]
+          
+          pad.buttons = buttons
+
     loopProc()
     window.swapBuffers()
   )
@@ -292,6 +386,21 @@ proc initCore*(loopProc: proc(), initProc: proc() = (proc() = discard), params: 
 
 proc setWindowTitle*(title: string) =
   window.setWindowTitle(title)
+
+proc setWindowDecorated*(decorated: bool) =
+  window.setWindowAttrib(DECORATED, decorated.cint)
+
+proc setWindowFloating*(floating: bool) =
+  window.setWindowAttrib(FLOATING, floating.cint)
+
+proc setClipboardString*(text: string) =
+  window.setClipboardString(text.cstring)
+
+proc getClipboardString*(): string =
+  $window.getClipboardString()
+
+proc setCursor*(cursor: Cursor) =
+  window.setCursor(cursor.handle)
 
 proc getCursorPos*(): Vec2 =
   var 
@@ -312,8 +421,44 @@ proc getWindowPos*(): Vec2i =
   window.getWindowPos(addr w, addr h)
   return vec2i(w.int, h.int)
 
+proc getWindowSize*(): Vec2i =
+  var 
+    w: cint
+    h: cint
+  window.getWindowSize(addr w, addr h)
+  return vec2i(w.int, h.int)
+
+proc setWindowSize*(size: Vec2i) =
+  window.setWindowSize(size.x.cint, size.y.cint)
+
 proc setVsync*(on: bool) =
   swapInterval(on.cint)
+
+proc isMaximized*(): bool = window.getWindowAttrib(MAXIMIZED).bool
+
+proc isFullscreen*(): bool =
+  return window.getWindowMonitor() != nil
+
+proc setFullscreen*(on: bool) =
+  #pointless
+  if isFullscreen() == on or defined(emscripten):
+    return
+
+  let mode = getVideoMode(getPrimaryMonitor())
+  if on:
+    #save fullscreen rectangle
+    window.getWindowPos(addr windowedRect[0], addr windowedRect[1])
+    window.getWindowSize(addr windowedRect[2], addr windowedRect[3])
+
+    window.setWindowMonitor(getPrimaryMonitor(), 0, 0, mode.width, mode.height, mode.refreshRate)
+  else:
+    window.setWindowMonitor(nil, windowedRect[0], windowedRect[1], windowedRect[2], windowedRect[3], 0)
+
+proc toggleFullscreen*() =
+  setFullscreen(not isFullscreen())
+
+proc setCursorHidden*(hidden: bool) =
+  window.setInputMode(staticglfw.CURSOR, if hidden: CursorHidden.cint else: CursorNormal.cint)
 
 #stops the game, does not quit immediately
 proc quitApp*() = running = false

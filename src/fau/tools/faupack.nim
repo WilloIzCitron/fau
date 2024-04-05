@@ -1,6 +1,16 @@
-import ../g2/packer, os, algorithm, pixie, strformat, tables, math, streams, times, chroma, strutils
+import ../g2/packer, ../util/[aseprite, tiled]
+import std/[os, algorithm, strformat, tables, math, streams, times, strutils]
+import pkg/[pixie, jsony, chroma]
+
+type FolderSettings = object
+  outlineColor: ColorRGBA
 
 from vmath import nil
+
+proc parseHook*(s: string, i: var int, v: var ColorRGBA) =
+  var str: string
+  parseHook(s, i, str)
+  v = str.parseHex.rgba
 
 proc fail(reason: string) = raise Exception.newException(reason)
 
@@ -24,16 +34,61 @@ proc outline(image: Image, color: ColorRGBA) =
         if found:
           image[x, y] = color
 
+proc getImageSize(file: string): tuple[w: int, h: int] =
+  var bytes: array[24, uint8]
+  var outp: seq[uint8]
 
-proc packImages(path: string, output: string = "atlas", min = 64, max = 1024, padding = 0, bleeding = 2, verbose = false, silent = false, outlineFolder = "", outlineColor = "000000") =
-  let packer = newPacker(min, min)
-  let outlineRgba = outlineColor.parseHex.rgba
-  var positions = initTable[string, tuple[image: Image, file: string, pos: tuple[x, y: int], splits: array[4, int]]]()
+  #TODO must be a better way to read an int from a file
+  let f = open(file)
+  discard readBytes(f, bytes, 0, bytes.len)
+  close(f)
 
-  let time = cpuTime()
-  let totalPad = padding + bleeding
+  if file.splitFile.ext == ".png":
+    outp = bytes[16..19]
+    reverse(outp)
+    let w = cast[ptr int32](addr outp[0])[]
+    outp = bytes[20..23]
+    reverse(outp)
+    let h = cast[ptr int32](addr outp[0])[]
+    return (w.int, h.int)
+  elif file.splitFile.ext == ".aseprite":
+    outp = bytes[8..9]
+    let w = cast[ptr uint16](addr outp[0])[]
+    outp = bytes[10..11]
+    let h = cast[ptr uint16](addr outp[0])[]
+    return (w.int, h.int)
 
-  proc packFile(file: string, image: Image, splits = [-1, -1, -1, -1]) =
+
+proc packImages(path: string, output: string = "atlas", tilemapFolder = "", min = 64, max = 2048, padding = 0, bleeding = 2, verbose = false, silent = false) =
+  let 
+    time = cpuTime()
+    packer = newPacker(min, min)
+    blackRgba = rgba(0, 0, 0, 255)
+    totalPad = padding + bleeding
+  
+  var 
+    positions = initTable[string, tuple[image: Image, file: string, pos: tuple[x, y: int], splits: array[4, int], duration: int]]()
+    settings = initTable[string, FolderSettings]()
+  
+  proc getSettings(file: string): FolderSettings =
+    let parent = file.parentDir
+    
+    settings.withValue(parent, value):
+      return value[]
+    do:
+      let settingsFile = parent / "folder.json"
+      if settingsFile.fileExists:
+        try:
+          let res = settingsFile.readFile.fromJson(FolderSettings)
+          settings[parent] = res
+          return res
+        except CatchableError as e:
+          echo "Error reading settings file ", settingsFile, " ", e.msg
+      
+      result = FolderSettings()
+      settings[parent] = result
+
+  proc packFile(file: string, image: Image, splits = [-1, -1, -1, -1], duration = 0) =
     let name = file.splitFile.name
 
     if verbose: echo &"Packing image {name}..."
@@ -60,31 +115,47 @@ proc packImages(path: string, output: string = "atlas", min = 64, max = 1024, pa
         else:
           packer.resize(packer.w, (packer.h + 1).nextPowerOfTwo)
     
-    positions[name] = (image, file, pos, splits)
+    positions[name] = (image, file, pos, splits, duration)
 
   type PackEntry = tuple[file: string, size: int]
   var toPack: seq[PackEntry]
-  var bytes: array[24, uint8]
-  var outp: seq[uint8]
+
+  #pack tilemap tiles
+  if tilemapFolder != "":
+    for file in walkDirRec(tilemapFolder):
+      let split = file.splitFile
+      if split.ext == ".tmj":
+        try:
+          let tilemap = readTilemapFile(file)
+          for tileset in tilemap.tilesets:
+            var images: Table[string, Image]
+            for tile in tileset.tiles:
+              var tileImageName = tileset.name & $tile.id
+              
+              #some maps share tilesets.
+              if not positions.hasKey(tileImageName):
+                if not images.hasKey(tile.image):
+                  images[tile.image] = readImage(file / "../" / tile.image)
+                
+                var 
+                  cropped = images[tile.image]
+                
+                if tile.width > 0 and tile.height > 0:
+                  cropped = cropped.subImage(tile.x, tile.y, tile.width, tile.height)
+                
+                if not cropped.isTransparent:
+                  packFile(file / tileImageName, cropped)
+        except:
+          echo "Failed to parse tilemap file ", file, ": ", getCurrentExceptionMsg()
 
   #grab and sort files in order of size for more deterministic packing
   for file in walkDirRec(path):
     let split = file.splitFile
-    if split.ext == ".png":
+    if split.ext == ".png" or split.ext == ".aseprite":
 
-      #TODO must be a better way to read an int from a file
-      let f = open(file)
-      discard readBytes(f, bytes, 0, bytes.len)
-      close(f)
+      let size = getImageSize(file)
 
-      outp = bytes[16..19]
-      reverse(outp)
-      let w = cast[ptr int32](addr outp[0])[]
-      outp = bytes[20..23]
-      reverse(outp)
-      let h = cast[ptr int32](addr outp[0])[]
-
-      toPack.add (file, max(w, h).int)
+      toPack.add (file, max(size.w, size.h).int)
 
   toPack.sort do (a, b: PackEntry) -> int: -cmp(a.size, b.size)
 
@@ -126,10 +197,49 @@ proc packImages(path: string, output: string = "atlas", min = 64, max = 1024, pa
 
       #only save the cropped variant.
       packFile(split.name, cropped, [left, right, top, bot])
+    elif split.ext == ".aseprite":
+      try:
+        let aseFile = readAseFile(file)
+
+        #standard ase file
+        for layer in aseFile.layers:
+          #skip locked layers; I do not want to skip 'invisible' layers for convenience, so locked is used as the flag here instead
+          if layer.kind == alImage and layer.frames.len > 0 and afEditable in layer.flags:
+            #single-layer aseprite files default to file name only
+            let name = if aseFile.layers.len == 1: "" else: layer.name
+
+            let imageName = 
+              if name.len == 0: split.name
+              elif name[0] == '#' or name[0] == '@': layer.name[1..^1] #prefix layer name with @ or # to name it 'raw' without prefix
+              else: split.name & "" & layer.name.capitalizeAscii #otherwise, use camel case concatenation
+
+            for i, frame in layer.frames:
+              #if there is 1 frame, don't add a suffix, otherwise use 0-indexing
+              let frameName = if layer.frames.len == 1: imageName else: imageName & $i
+
+              #copy layer RGBA data into new image
+              let image = newImage(frame.width, frame.height)
+              copyMem(addr image.data[0], addr frame.data[0], frame.width * frame.height * 4)
+              
+              #aseprite layers are "cropped", so each layer needs to have a new image made with the uncropped version
+              let full = newImage(aseFile.width, aseFile.height)
+              full.draw(image, translate(vec2(frame.x.float32, frame.y.float32)))
+
+              if layer.userData == "outline" or layer.userData == "outlined":
+                outline(full, if layer.userColor == 0'u32: blackRgba else: cast[ColorRGBA](layer.userColor))
+
+              packFile(file / frameName, full, duration = frame.duration)
+      
+      except CatchableError:
+        echo "Failed to read file ", file, ": ", getCurrentExceptionMsg()
+
     else:
-      let img = readImage(file)
-      if outlineFolder.len != 0 and file.contains(outlineFolder):
-        outline(img, outlineRgba)
+      let 
+        img = readImage(file)
+        prefs = getSettings(file)
+      
+      if prefs.outlineColor.a > 0:
+        outline(img, prefs.outlineColor)
 
       packFile(file, img)
 
@@ -196,6 +306,8 @@ proc packImages(path: string, output: string = "atlas", min = 64, max = 1024, pa
         stream.write val.int16
     else:
       stream.write false
+    
+    stream.write region.duration.uint16
   
   stream.close()
   image.writeFile(&"{output}.png")

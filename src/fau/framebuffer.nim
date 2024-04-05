@@ -8,6 +8,7 @@ type FramebufferObj* = object
   isDefault: bool
   hasDepth: bool
   depthHandle: GLuint
+  filter: TextureFilter
 type Framebuffer* = ref FramebufferObj
 
 proc `=destroy`*(buffer: var FramebufferObj) =
@@ -61,6 +62,9 @@ proc resize*(buffer: Framebuffer, size: Vec2i) =
 
   glBindTexture(GlTexture2D, buffer.texture.handle)
   glTexImage2D(GlTexture2D, 0, GlRgba.Glint, width.GLsizei, height.GLsizei, 0, GlRgba, GlUnsignedByte, nil)
+  
+  glTexParameteri(GlTexture2D, GlTextureMinFilter, buffer.filter.toGlEnum.GLint)
+  glTexParameteri(GlTexture2D, GlTextureMagFilter, buffer.filter.toGlEnum.GLint)
 
   if buffer.hasDepth:
     glFramebufferRenderbuffer(GlFramebuffer, GlDepthAttachment, GlRenderbuffer, buffer.depthHandle)
@@ -83,8 +87,8 @@ proc resize*(buffer: Framebuffer, size: Vec2i) =
 proc resize*(buffer: Framebuffer, size: Vec2) = buffer.resize(size.vec2i)
 
 #If not size arguments are provided, this buffer cannot be used until it is resized.
-proc newFramebuffer*(size = vec2i(2), depth = false): Framebuffer = 
-  result = Framebuffer(hasDepth: depth)
+proc newFramebuffer*(size = vec2i(2), depth = false, filter = tfNearest): Framebuffer = 
+  result = Framebuffer(hasDepth: depth, filter: filter)
   
   if size.x != 2 or size.y != 2: result.resize(size)
 
@@ -92,14 +96,15 @@ proc newFramebuffer*(size = vec2i(2), depth = false): Framebuffer =
 proc newDefaultFramebuffer*(windowDepth: bool): Framebuffer = Framebuffer(handle: glGetIntegerv(GlFramebufferBinding).GLuint, isDefault: true, hasDepth: windowDepth)
 
 #Binds the framebuffer. Internal use only!
-proc use*(buffer: Framebuffer) =
+proc use*(buffer: Framebuffer, viewPos = vec2i(), viewSize = buffer.size) =
   glBindFramebuffer(GlFramebuffer, buffer.handle)
-  glViewport(0, 0, buffer.size.x.Glsizei, buffer.size.y.Glsizei)
+  glViewport(viewPos.x.Glsizei, viewPos.y.Glsizei, viewSize.x.Glsizei, viewSize.y.Glsizei)
 
 proc clear*(buffer: Framebuffer, color = colorClear) =
   ## Clears the color & depth buffers.
   buffer.use()
   
+  glDisable(GlScissorTest)
   glClearColor(color.r, color.g, color.b, color.a)
 
   if buffer.hasDepth:

@@ -23,6 +23,16 @@ type
     of reqProc:
       draw*: proc()
 
+type CacheMesh = object
+  mesh: Mesh2
+  texture: Texture
+  shader: Shader
+  clip: Rect
+  blend: Blending
+
+type SpriteCache* = ref object
+  meshes: seq[CacheMesh]
+
 type Batch* = ref object
   mesh: Mesh2
   defaultShader: Shader
@@ -30,7 +40,7 @@ type Batch* = ref object
   lastTexture: Texture
   lastBlend: Blending
   buffer: Framebuffer
-  clip: Rect
+  clip, viewport: Rect
   index: int
   size: int
   req: seq[Req]
@@ -40,22 +50,26 @@ type Batch* = ref object
   #Whether sorting is enabled for the batch
   sort: bool
 
-type AlignSide* = enum
-  asLeft, asRight, asTop, asBot
+  #caching-specific state
+  caching: bool
+  caches: seq[CacheMesh]
 
-type Align* = set[AlignSide]
-
-#types of draw alignment for sprites
-const
-  daLeft* = {asLeft}
-  daRight* = {asRight}
-  daTop* = {asTop}
-  daBot* = {asBot}
-  daTopLeft* = {asTop, asLeft}
-  daTopRight* = {asTop, asRight}
-  daBotLeft* = {asBot, asLeft}
-  daBotRight* = {asBot, asRight}
-  daCenter* = {asLeft, asRight, asTop, asBot}
+const defaultVertShader* = """
+attribute vec4 a_pos;
+attribute vec4 a_color;
+attribute vec2 a_uv;
+attribute vec4 a_mixcolor;
+uniform mat4 u_proj;
+varying vec4 v_color;
+varying vec4 v_mixcolor;
+varying vec2 v_uv;
+void main(){
+  v_color = a_color;
+  v_mixcolor = a_mixcolor;
+  v_uv = a_uv;
+  gl_Position = u_proj * a_pos;
+  }
+"""
 
 proc flushInternal(batch: Batch) =
   if batch.index == 0: return
@@ -63,11 +77,26 @@ proc flushInternal(batch: Batch) =
   #use global shader if there is one set
   let shader = if batch.lastShader.isNil: batch.defaultShader else: batch.lastShader
 
-  batch.mesh.updateVertices(0..<batch.index)
-  
-  batch.mesh.render(shader, meshParams(batch.buffer, 0, batch.index div 4 * 6, blend = batch.lastBlend, clip = batch.clip)):
-    texture = batch.lastTexture.sampler
-    proj = batch.mat
+  if batch.caching:
+    #add a new mesh to the cache
+    batch.caches.add(CacheMesh(
+      mesh: newMesh(
+        vertices = batch.mesh.vertices[0..<batch.index],
+        indices = batch.mesh.indices[0..<(batch.index div 4 * 6)],
+        isStatic = true
+      ),
+      blend: batch.lastBlend,
+      clip: batch.clip,
+      shader: shader,
+      texture: batch.lastTexture
+    ))
+
+  else:
+    batch.mesh.updateVertices(0..<batch.index)
+    
+    batch.mesh.render(shader, meshParams(batch.buffer, 0, batch.index div 4 * 6, blend = batch.lastBlend, clip = batch.clip, viewport = batch.viewport)):
+      texture = batch.lastTexture.sampler
+      proj = batch.mat
 
   batch.index = 0
 
@@ -149,7 +178,7 @@ proc draw*(batch: Batch, req: Req) =
     of reqProc:
       req.draw()
 
-proc newBatch*(size: int = 4092): Batch = 
+proc newBatch*(size: int = 16380): Batch = 
   let batch = Batch(
     mesh: newMesh(
       vertices = newSeq[Vert2](size * 4),
@@ -167,28 +196,12 @@ proc newBatch*(size: int = 4092): Batch =
   var i = 0
   
   while i < len:
-    indices.minsert(i, [j.GLushort, (j+1).GLushort, (j+2).GLushort, (j+2).GLushort, (j+3).GLushort, (j).GLushort])
+    indices.minsert(i, [j.Index, (j+1).Index, (j+2).Index, (j+2).Index, (j+3).Index, (j).Index])
     i += 6
     j += 4
   
   #create default shader
-  batch.defaultShader = newShader(
-  """
-  attribute vec4 a_pos;
-  attribute vec4 a_color;
-  attribute vec2 a_uv;
-  attribute vec4 a_mixcolor;
-  uniform mat4 u_proj;
-  varying vec4 v_color;
-  varying vec4 v_mixcolor;
-  varying vec2 v_uv;
-  void main(){
-    v_color = a_color;
-    v_mixcolor = a_mixcolor;
-    v_uv = a_uv;
-    gl_Position = u_proj * a_pos;
-  }
-  """,
+  batch.defaultShader = newShader(defaultVertShader,
 
   """
   varying lowp vec4 v_color;
@@ -238,6 +251,10 @@ proc clip*(batch: Batch, rect: Rect) =
   batch.flush()
   batch.clip = rect
 
+proc viewport*(batch: Batch, rect: Rect) =
+  batch.flush()
+  batch.viewport = rect
+
 #Sets the framebuffer used for rendering. This flushes the batch.
 proc buffer*(batch: Batch, buffer: Framebuffer) = 
   batch.flush()
@@ -245,4 +262,25 @@ proc buffer*(batch: Batch, buffer: Framebuffer) =
 
 proc buffer*(batch: Batch): Framebuffer = batch.buffer
 
-#TODO set dest buffer
+#draw a pre-cached mesh
+proc draw*(batch: Batch, cache: SpriteCache) =
+  batch.flush()
+
+  for mesh in cache.meshes:
+    mesh.mesh.render(mesh.shader, meshParams(batch.buffer, 0, mesh.mesh.indices.len, blend = mesh.blend, clip = mesh.clip)):
+      texture = mesh.texture.sampler
+      proj = batch.mat
+
+proc beginCache*(batch: Batch) =
+  if not batch.caching:
+    batch.flush()
+    batch.caching = true
+
+proc endCache*(batch: Batch): SpriteCache =
+  batch.flush()
+  batch.caching = false
+  result = SpriteCache(meshes: batch.caches)
+  batch.caches = @[]
+
+#for debugging
+proc len*(cache: SpriteCache): int = cache.meshes.len

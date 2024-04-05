@@ -1,4 +1,4 @@
-import stb_image/read as stbi, gl/[glproc, gltypes], fmath, assets
+import stb_image/read as stbi, gl/[glproc, gltypes], fmath, assets, os
 
 type TextureFilter* = enum
   tfNearest,
@@ -17,6 +17,10 @@ type TextureObj = object
   size*: Vec2i
 type Texture* = ref TextureObj
 
+type Img* = object
+  width*, height*: int
+  data*: seq[uint8]
+
 proc `=destroy`*(texture: var TextureObj) =
   if texture.handle != 0 and glInitialized:
     glDeleteTexture(texture.handle)
@@ -28,7 +32,7 @@ proc use*(texture: Texture, unit: int = 0) =
   glActiveTexture((GlTexture0.int + unit).GLenum)
   glBindTexture(texture.target, texture.handle)
 
-proc toGlEnum(filter: TextureFilter): GLenum {.inline.} =
+proc toGlEnum*(filter: TextureFilter): GLenum {.inline.} =
   case filter
   of tfNearest: GlNearest
   of tfLinear: GlLinear
@@ -73,6 +77,8 @@ proc `wrap=`*(texture: Texture, wrap: TextureWrap) =
   texture.wrapU = wrap
   texture.wrapV = wrap
 
+proc ratio*(texture: Texture): float32 = float32(texture.size.x / texture.size.y)
+
 #completely reloads texture data
 proc load*(texture: Texture, size: Vec2i, pixels: pointer) =
   #bind texture
@@ -98,15 +104,15 @@ proc newTexture*(size: Vec2i = vec2i(1), filter = tfNearest, wrap = twClamp): Te
   glTexParameteri(result.target, GlTextureWrapT, result.vwrap.toGlEnum.GLint)
 
 #load texture from ptr to decoded PNG data
-proc loadTexturePtr*(size: Vec2i, data: pointer): Texture =
-  result = newTexture()
+proc loadTexturePtr*(size: Vec2i, data: pointer, filter = tfNearest, wrap = twClamp): Texture =
+  result = newTexture(filter = filter, wrap = wrap)
 
   result.size = size
   result.load(size, data)
 
 #load texture from bytes
-proc loadTextureBytes*(bytes: string): Texture =
-  result = newTexture()
+proc loadTextureBytes*(bytes: string, filter = tfNearest, wrap = twClamp): Texture =
+  result = newTexture(filter = filter, wrap = wrap)
 
   var
     width, height, channels: int
@@ -116,23 +122,39 @@ proc loadTextureBytes*(bytes: string): Texture =
   result.load(vec2i(width, height), addr data[0])
 
 #load texture from path
-proc loadTextureFile*(path: string): Texture = 
-  result = newTexture()
+proc loadTextureFile*(path: string, filter = tfNearest, wrap = twClamp): Texture = 
+  result = newTexture(filter = filter, wrap = wrap)
 
   var
     width, height, channels: int
     data: seq[uint8]
+  
+  try:
+    data = stbi.load(path, width, height, channels, 4)
+  except STBIException:
+    raise Exception.newException("Failed to load image '" & path & "': " & $getCurrentExceptionMsg())
 
-  data = stbi.load(path, width, height, channels, 4)
   result.load(vec2i(width, height), addr data[0])
 
-proc loadTextureAsset*(path: string): Texture =
-  loadTextureBytes(assetRead(path))
+proc loadTextureAsset*(path: string, filter = tfNearest, wrap = twClamp): Texture =
+  loadTextureBytes(assetRead(path), filter, wrap)
 
-proc loadTexture*(path: static[string]): Texture =
+proc loadTexture*(path: static[string], filter = tfNearest, wrap = twClamp): Texture =
   when staticAssets:
-    loadTextureBytes(assetReadStatic(path))
+    loadTextureBytes(assetReadStatic(path), filter, wrap)
   elif defined(Android): #android -> load asset
-    loadTextureBytes(assetRead(path))
+    loadTextureBytes(assetRead(path), filter, wrap)
   else: #load from filesystem
-    loadTextureFile(path.assetFile)
+    loadTextureFile(path.assetFile, filter, wrap)
+
+proc loadImgBytes*(textureBytes: string): Img =
+  var
+    width, height, channels: int
+    data: seq[uint8]
+  
+  data = stbi.loadFromMemory(cast[seq[byte]](textureBytes), width, height, channels, 4)
+
+  return Img(data: data, width: width, height: height)
+
+proc loadImg*(path: static[string]): Img =
+  return loadImgBytes(assetReadStatic(path))

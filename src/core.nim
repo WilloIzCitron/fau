@@ -1,6 +1,8 @@
 import fau/[fmath, globals, color, framebuffer, mesh, patch, shader, texture, batch, atlas, draw, screenbuffer, input]
 import os, times, random
 
+const isDebug* = defined(debug)
+
 when isMobile:
   include fau/backend/glfmcore
 else:
@@ -10,7 +12,7 @@ when not defined(noAudio):
   import fau/audio
   export audio
 
-when defined(debug):
+when isDebug:
   import fau/util/recorder
 
 export fmath, globals, color, framebuffer, mesh, patch, shader, texture, batch, atlas, draw, screenbuffer, input
@@ -66,12 +68,14 @@ proc initFau*(loopProc: proc(), initProc: proc() = (proc() = discard), params = 
         t.pos = e.dragPos
     of feVisible:
       fau.shown = e.shown
+    else: discard
   )
 
   initCore(
   (proc() =
     var time = (times.getTime() - startTime).inNanoseconds
-    if lastFrameTime == -1: lastFrameTime = time
+    #at the start of the game, delta is assumed to be 1/60
+    if lastFrameTime == -1: lastFrameTime = time - 16666666
 
     if fau.targetFps != 0:
       #expected ns between frames
@@ -110,7 +114,7 @@ proc initFau*(loopProc: proc(), initProc: proc() = (proc() = discard), params = 
     #flush any pending draw operations
     drawFlush()
 
-    when defined(debug):
+    when isDebug:
       record()
 
     inc fau.frameId

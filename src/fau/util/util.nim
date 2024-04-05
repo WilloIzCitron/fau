@@ -4,6 +4,15 @@ import macros, tables, streams, strutils
 
 var eventHandlers* {.compileTime} = newTable[string, seq[NimNode]]()
 
+template findIt*[T](list: seq[T], body: untyped): int =
+  var result = -1
+  for i, it {.inject.} in list:
+    if body:
+      result = i
+      break
+  
+  result
+
 template incTimer*(value: untyped, increment: float32, body: untyped): untyped =
   `value` += `increment`
   if `value` >= 1f:
@@ -19,6 +28,21 @@ macro minsert*(dest: untyped, index: int, data: untyped): untyped =
       result.add newAssignment(newNimNode(nnkBracketExpr).add(dest).add(infix(index, "+", newIntLitNode(i))), data[i])
   else:
     error("Insertion data must be array!", data)
+
+macro loadProc*(varType: typedesc, name: untyped, body: untyped) =
+  result = newStmtList()
+  result.add(newNimNode(nnkVarSection))
+  result[0].add(newNimNode(nnkIdentDefs))
+
+  for varName in body:
+    result[0][0].add(postfix(varName[0], "*"))
+
+  result[0][0].add(ident($varType))
+  result[0][0].add(newEmptyNode())
+
+  result.add quote do:
+    proc `name`*() =
+      `body`
 
 ## exports all types/variables in the macro body
 macro exportAll*(body: untyped) =
@@ -55,6 +79,17 @@ template importAll*(): untyped =
         if split.ext == ".nim" and split.name != filename[0..^5]: result.add ident(split.name)
   
   importAllDef(instantiationInfo().filename)
+
+#https://forum.nim-lang.org/t/9504
+template unroll*(iter, name0, body0: untyped): untyped =
+  macro unrollImpl(name, body) =
+    result = newStmtList()
+    for a in iter:
+      result.add(newBlockStmt(newStmtList(
+        newConstStmt(name, newLit(a)),
+        copy body
+      )))
+  unrollImpl(name0, body0)
 
 #this was kind of a bad idea...
 #[

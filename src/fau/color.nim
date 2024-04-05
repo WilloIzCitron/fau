@@ -1,11 +1,11 @@
 
-import fmath, math, strutils
+import fmath, math, strutils, endians
 
 #defines a RGBA color
 type Color* = object
   rv*, gv*, bv*, av*: uint8
 
-#just incase something gets messed up somewhere
+#just in case something gets messed up somewhere
 static: assert sizeof(Color) == 4, "Size of Color must be 4 bytes, but is " & $sizeof(Color)
 
 #float accessors for colors
@@ -32,10 +32,12 @@ func rgb*(rgba: float32): Color {.inline.} = rgb(rgba, rgba, rgba)
 
 func alpha*(a: float32): Color {.inline.} = rgba(1.0, 1.0, 1.0, a)
 
+func gray*(g: float32): Color {.inline.} = rgb(g, g, g)
+
 #H, S, V are all floats from 0 to 1
 func hsv*(h, s, v: float32, a = 1f): Color =
   let 
-    x = (h * 60f + 6f).mod(6f)
+    x = (h * 6f + 6f).mod(6f)
     i = x.floor
     f = x - i
     p = v * (1 - s)
@@ -59,9 +61,18 @@ func `*`*(a: Color, b: float32): Color {.inline.} = rgba(a.r * b, a.g * b, a.b *
 func `+`*(a, b: Color): Color {.inline.} = rgba(a.r + b.r, a.g + b.g, a.b + b.b, a.a + b.a)
 func `+`*(a: Color, b: float32): Color {.inline.} = rgba(a.r + b, a.g + b, a.b + b, a.a)
 
+proc rgbaToColor*(val: uint32): Color =
+  var reversed = val
+  swapEndian32(addr reversed, addr val)
+  return cast[Color](reversed)
+
 proc mix*(color: Color, other: Color, alpha: float32): Color =
   let inv = 1.0 - alpha
   return rgba(color.r*inv + other.r*alpha, color.g*inv + other.g*alpha, color.b*inv + other.b*alpha, color.a*inv + other.a*alpha)
+
+proc mix*(color: var Color, other: Color, alpha: float32) = 
+  let inv = 1.0 - alpha
+  color = rgba(color.r*inv + other.r*alpha, color.g*inv + other.g*alpha, color.b*inv + other.b*alpha, color.a*inv + other.a*alpha)
 
 #converts a hex string to a color at compile-time; no overhead
 export parseHexInt
@@ -78,6 +89,8 @@ proc parseColor*(str: string): Color =
     av: if str.len > 6 + offset: str[(6+offset)..(7+offset)].parseHexInt.uint8 else: 255'u8
   )
 
+proc `$`*(color: Color): string = toHex(cast[uint32]((color.rv.uint32 shl 24) or (color.gv.uint32 shl 16) or (color.bv.uint32 shl 8) or color.av))
+
 const
   colorClear* = rgba(0, 0, 0, 0)
   colorWhite* = rgb(1, 1, 1)
@@ -88,6 +101,8 @@ const
   colorCoral* = %"ff7f50"
   colorOrange* = %"ffa500"
   colorRed* = rgb(1, 0, 0)
+  colorMagenta* = rgb(1, 0, 1)
+  colorPurple* = %"a020f0"
   colorGreen* = rgb(0, 1, 0)
   colorBlue* = rgb(0, 0, 1)
   colorPink* = %"ff69b4"

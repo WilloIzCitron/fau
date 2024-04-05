@@ -5,7 +5,7 @@ when defined(Android):
   import glfm
 
 ## if true, assets are loaded statically instead of from a local folder
-## this is always true by default on emscripten
+## this is always false by default on emscripten
 const staticAssets* = not defined(localAssets) and not defined(emscripten) and not defined(Android)
 ## project root directory
 const rootDir = if getProjectPath().endsWith("src"): getProjectPath()[0..^5] else: getProjectPath()
@@ -61,10 +61,13 @@ proc assetRead*(filename: string): string =
     return readFile(filename.assetFile)
 
 template assetReadStatic*(filename: string): string =
-  ## Reads a static-only asset
-  const realDir = rootDir & "/assets/" & filename
-  const str = staticRead(realDir)
-  str
+  when not staticAssets:
+    assetRead(filename)
+  else:
+    ## Reads a static-only asset
+    const realDir = rootDir & "/assets/" & filename
+    const str = staticRead(realDir)
+    str
 
 proc assetExistsStatic*(filename: static string): bool =
   const realDir = rootDir & "/assets/" & filename

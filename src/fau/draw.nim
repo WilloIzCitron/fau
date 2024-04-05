@@ -34,7 +34,11 @@ proc drawSort*(sort: bool) =
 proc drawMat*(mat: Mat) =
   fau.batch.mat(mat)
 
-proc drawClip*(clipped = rect()) =
+proc drawViewport*(rect = rect()) =
+  fau.batch.viewport(rect)
+
+#TODO should use a stack.
+proc drawClip*(clipped = rect()): bool {.discardable.} =
   if clipped.w.int > 0 and clipped.h.int > 0:
     #transform clipped rectangle from world into screen space
     let
@@ -42,8 +46,15 @@ proc drawClip*(clipped = rect()) =
       botLeft = project(fau.batch.mat, clipped.botLeft)
 
     fau.batch.clip(rect(botLeft, topRight - botLeft))
+    return true
   else:
     fau.batch.clip(rect())
+    return false
+
+template drawClipped*(clip: Rect, body: untyped) =
+  if drawClip(clip):
+    body
+    drawClip()
 
 proc drawBuffer*(buffer: Framebuffer) =
   fau.batch.buffer(buffer)
@@ -51,13 +62,27 @@ proc drawBuffer*(buffer: Framebuffer) =
 proc drawBufferScreen*() =
   fau.batch.buffer(screen)
 
+proc beginCache*(sort = true) =
+  drawSort(sort)
+  fau.batch.beginCache()
+
+proc endCache*(): SpriteCache =
+  result = fau.batch.endCache()
+  drawSort(true)
+
 proc screenMat*() =
   drawMat(ortho(vec2(), fau.size))
 
 #Activates a camera.
-proc use*(cam: Cam, size = cam.size, pos = cam.pos) =
-  cam.update(size, pos)
+proc use*(cam: Cam, size = cam.size, pos = cam.pos, screenBounds = rect(vec2(), fau.size)) =
+  drawFlush()
+  cam.update(screenBounds, size, pos)
   drawMat cam.mat
+
+proc draw*(cache: SpriteCache) =
+  ## Draws pre-cached sprite data.
+  if cache != nil:
+    fau.batch.draw(cache)
 
 #Draws something custom at a specific Z layer
 proc draw*(z: float32, value: proc(), blend = blendNormal, shader: Shader = nil) =
@@ -68,7 +93,9 @@ proc drawLayer*(z: float32, layerBegin, layerEnd: proc(), spread: float32 = 1) =
   draw(z - spread, layerBegin)
   draw(z + spread, layerEnd)
 
-proc draw*(region: Patch, pos: Vec2, size = region.size * fau.pixelScl,
+proc draw*(
+  region: Patch, pos: Vec2, 
+  size = region.size * fau.pixelScl,
   z = 0f,
   scl = vec2(1f),
   origin = size * 0.5f * scl, 
@@ -88,6 +115,14 @@ proc draw*(region: Patch, pos: Vec2, size = region.size * fau.pixelScl,
     rotation: rotation, color: color, mixColor: mixColor,
     blend: blend, shader: shader
   ))
+
+proc draw*(
+  region: Patch, bounds: Rect,
+  z = 0f,
+  origin = bounds.center, 
+  rotation = 0f, align = daCenter,
+  color = colorWhite, mixColor = colorClear, 
+  blend = blendNormal, shader: Shader = nil) {.inline.} = draw(region, bounds.xy, bounds.size, 0f, vec2(1f), origin, rotation, daBotLeft, color, mixColor, blend, shader)
 
 #draws a region with rotated bits
 proc drawv*(region: Patch, pos: Vec2, corners: array[4, Vec2], z = 0f, size = region.size * fau.pixelScl,
@@ -185,6 +220,9 @@ proc draw*(p: Patch9, pos: Vec2, size: Vec2, z: float32 = 0f, color = colorWhite
 proc draw*(p: Patch9, bounds: Rect, z: float32 = 0f, color = colorWhite, mixColor = colorClear, scale = 1f, blend = blendNormal) =
   draw(p, bounds.pos, bounds.size, z, color, mixColor, scale, blend = blend)
 
+proc drawBlit*(buffer: Framebuffer, color = colorWhite, blend = blendNormal, z = 0f, shader: Shader = nil) =
+  draw(buffer.texture, fau.cam.pos, fau.cam.size * vec2(1f, -1f), color = color, blend = blend, z = z, shader = shader)
+
 #TODO does not support mid != 0
 #TODO divs could just be a single float value, arrays unnecessary
 proc drawBend*(p: Patch, pos: Vec2, divs: openArray[float32], mid = 0, rotation = 0f, z: float32 = 0f, size = p.size * fau.pixelScl, scl = vec2(1f, 1f), color = colorWhite, mixColor = colorClear) = 
@@ -234,14 +272,17 @@ proc drawBend*(p: Patch, pos: Vec2, divs: openArray[float32], mid = 0, rotation 
   for i in countdown(mid - 1, 0):
     drawAt(i, -1f)
 
-proc fillQuad*(v1: Vec2, c1: Color, v2: Vec2, c2: Color, v3: Vec2, c3: Color, v4: Vec2, c4: Color, z: float32 = 0) =
-  drawVert(fau.white.texture, [vert2(v1, fau.white.uv, c1), vert2(v2, fau.white.uv, c2),  vert2(v3, fau.white.uv, c3), vert2(v4, fau.white.uv, c4)], z)
+proc fillQuad*(v1: Vec2, c1: Color, v2: Vec2, c2: Color, v3: Vec2, c3: Color, v4: Vec2, c4: Color, z: float32 = 0, blend = blendNormal) =
+  drawVert(fau.white.texture, [vert2(v1, fau.white.uv, c1), vert2(v2, fau.white.uv, c2),  vert2(v3, fau.white.uv, c3), vert2(v4, fau.white.uv, c4)], z, blend = blend)
 
-proc fillQuad*(v1, v2, v3, v4: Vec2, color: Color, z = 0f) =
-  fillQuad(v1, color, v2, color, v3, color, v4, color, z)
+proc fillQuad*(v1, v2, v3, v4: Vec2, color: Color, z = 0f, blend = blendNormal) =
+  fillQuad(v1, color, v2, color, v3, color, v4, color, z, blend = blend)
 
 proc fillRect*(x, y, w, h: float32, color = colorWhite, z = 0f) =
   drawRect(fau.white, x, y, w, h, color = color, z = z)
+
+proc fillSquare*(pos: Vec2, radius: float32, color = colorWhite, z = 0f) =
+  draw(fau.white, pos, size = vec2(radius * 2f), color = color, z = z)
 
 proc fillRect*(rect: Rect, color = colorWhite, z = 0f) =
   fillRect(rect.x, rect.y, rect.w, rect.h, color, z)
@@ -295,7 +336,7 @@ proc fillLight*(pos: Vec2, radius: float32, sides = 20, centerColor = colorWhite
       z
     )
 
-proc line*(p1, p2: Vec2, stroke: float32 = 1.px, color = colorWhite, square = true, z: float32 = 0) =
+proc line*(p1, p2: Vec2, stroke: float32 = 1.px, color = colorWhite, square = true, z: float32 = 0, blend = blendNormal) =
   let hstroke = stroke / 2.0
   let diff = (p2 - p1).nor * hstroke
   let side = vec2(-diff.y, diff.x)
@@ -308,15 +349,16 @@ proc line*(p1, p2: Vec2, stroke: float32 = 1.px, color = colorWhite, square = tr
     s2 + side,
     s2 - side,
     s1 - side,
-    color, z
+    color, z,
+    blend = blend
   )
 
-proc lineAngle*(p: Vec2, angle, len: float32, stroke: float32 = 1.px, color = colorWhite, square = true, z = 0f) =
-  line(p, p + vec2l(angle, len), stroke, color, square, z)
+proc lineAngle*(p: Vec2, angle, len: float32, stroke: float32 = 1.px, color = colorWhite, square = true, z = 0f, blend = blendNormal) =
+  line(p, p + vec2l(angle, len), stroke, color, square, z, blend = blend)
 
-proc lineAngleCenter*(p: Vec2, angle, len: float32, stroke: float32 = 1.px, color = colorWhite, square = true, z = 0f) =
+proc lineAngleCenter*(p: Vec2, angle, len: float32, stroke: float32 = 1.px, color = colorWhite, square = true, z = 0f, blend = blendNormal) =
   let v = vec2l(angle, len)
-  line(p - v/2f, p + v/2f, stroke, color, square, z)
+  line(p - v/2f, p + v/2f, stroke, color, square, z, blend = blend)
 
 #TODO bad
 proc lineRect*(pos: Vec2, size: Vec2, stroke: float32 = 1.px, color = colorWhite, z: float32 = 0, margin = 0f) =
@@ -328,15 +370,15 @@ proc lineRect*(pos: Vec2, size: Vec2, stroke: float32 = 1.px, color = colorWhite
 proc lineRect*(rect: Rect, stroke: float32 = 1.px, color = colorWhite, z: float32 = 0, margin = 0f) =
   lineRect(rect.pos, rect.size, stroke, color, z, margin)
 
-proc lineSquare*(pos: Vec2, rad: float32, stroke: float32 = 1f, color = colorWhite, z = 0f) =
+proc lineSquare*(pos: Vec2, rad: float32, stroke: float32 = 1f.px, color = colorWhite, z = 0f) =
   lineRect(pos - rad, vec2(rad * 2f), stroke, color, z)
 
-proc spikes*(pos: Vec2, sides: int, radius: float32, len: float32, stroke = 1f, rotation = 0f, color = colorWhite, z = 0f) =
+proc spikes*(pos: Vec2, sides: int, radius: float32, len: float32, stroke = 1f.px, rotation = 0f, color = colorWhite, z = 0f) =
   for i in 0..<sides:
     let ang = i / sides * 360f.rad + rotation
     lineAngle(pos + vec2l(ang, radius), ang, len, stroke, color, z = z)
 
-proc poly*(pos: Vec2, sides: int, radius: float32, rotation = 0f, stroke = 1f, color = colorWhite, z = 0f) =
+proc poly*(pos: Vec2, sides: int, radius: float32, rotation = 0f, stroke = 1f.px, color = colorWhite, z = 0f) =
   let 
     space = PI*2 / sides.float32
     hstep = stroke / 2.0 / cos(space / 2.0)
@@ -346,6 +388,134 @@ proc poly*(pos: Vec2, sides: int, radius: float32, rotation = 0f, stroke = 1f, c
   for i in 0..<sides:
     let 
       a = space * i.float32 + rotation
+      cosf = cos(a)
+      sinf = sin(a)
+      cos2f = cos(a + space)
+      sin2f = sin(a + space)
+
+    fillQuad(
+      pos + vec2(cosf, sinf) * r1,
+      pos + vec2(cos2f, sin2f) * r1,
+      pos + vec2(cos2f, sin2f) * r2,
+      pos + vec2(cosf, sinf) * r2,
+      color, z
+    )
+
+proc poly*(points: openArray[Vec2], wrap = false, stroke = 1f.px, color = colorWhite, z = 0f) =
+  if points.len < 2: return
+
+  proc prepareFlatEndpoint(path, endpoint: Vec2, hstroke: float32): (Vec2, Vec2) =
+    let v = (endpoint - path).setLen(hstroke)
+    return (vec2(v.y, -v.x) + endpoint, vec2(-v.y, v.x) + endpoint)
+
+  proc prepareStraightJoin(b: Vec2, ab: Vec2, hstroke: float32): (Vec2, Vec2) =
+    let r = ab.setLen(hstroke)
+    return (vec2(-r.y, r.x) + b, vec2(r.y, -r.x) + b)
+
+  proc angleRef(v, reference: Vec2): float32 =
+    arctan2(reference.x * v.y - reference.y * v.x, v.x * reference.x + v.y * reference.y).float32
+
+  proc preparePointyJoin(a, b, c: Vec2, hstroke: float32): (Vec2, Vec2) =
+    var 
+      ab = b - a
+      bc = c - b
+      angle = ab.angleRef(bc)
+    
+    if angle.almostEqual(0f) or angle.almostEqual(pi2):
+      return prepareStraightJoin(b, ab, hstroke)
+      
+    let 
+      len = hstroke / sin(angle)
+      bendsLeft = angle < 0
+    
+    ab.len = len
+    bc.len = len
+
+    let 
+      p1 = b - ab + bc
+      p2 = b + ab - bc
+    
+    return if bendsLeft: (p1, p2) else: (p2, p1)
+
+  let hstroke = stroke * 0.5f
+
+  var
+    q1: Vec2
+    q2: Vec2
+    lq1: Vec2
+    lq2: Vec2
+
+  for i in 1..<(points.len - 1):
+    let 
+      a = points[i - 1]
+      b = points[i]
+      c = points[i + 1]
+    
+    let (q3, q4) = preparePointyJoin(a, b, c, hstroke)
+
+    if i == 1:
+      if wrap:
+        (q2, q1) = preparePointyJoin(points[^1], a, b, hstroke)
+        (lq1, lq2) = (q1, q2)
+      else:
+        (q2, q1) = prepareFlatEndpoint(points[1], points[0], hstroke)
+    
+    fillQuad(q1, q2, q3, q4, color = color, z = z)
+    q1 = q4
+    q2 = q3
+
+  if wrap:
+    let (q3, q4) = preparePointyJoin(points[^2], points[^1], points[0], hstroke)
+
+    fillQuad(q1, q2, q3, q4, color = color, z = z)
+    fillQuad(q3, q4, lq2, lq1, color = color, z = z)
+  else:
+    let (q4, q3) = prepareFlatEndpoint(points[^2], points[^1], hstroke)
+    fillQuad(q1, q2, q3, q4, color = color, z = z)
+
+proc arcRadius*(pos: Vec2, sides: int, angleFrom, angleTo: float32, radiusFrom, radiusTo: float32, rotation = 0f, color = colorWhite, z = 0f) =
+  let 
+    space = (angleTo - angleFrom) / sides.float32
+    r1 = radiusFrom
+    r2 = radiusTo
+  
+  for i in 0..<sides:
+    let 
+      a = space * i.float32 + rotation + angleFrom
+      cosf = cos(a)
+      sinf = sin(a)
+      cos2f = cos(a + space)
+      sin2f = sin(a + space)
+
+    fillQuad(
+      pos + vec2(cosf, sinf) * r1,
+      pos + vec2(cos2f, sin2f) * r1,
+      pos + vec2(cos2f, sin2f) * r2,
+      pos + vec2(cosf, sinf) * r2,
+      color, z
+    )
+
+
+proc arc*(pos: Vec2, sides: int, angleFrom, angleTo: float32, radius: float32, rotation = 0f, stroke = 1f.px, color = colorWhite, z = 0f) =
+  let 
+    space = (angleTo - angleFrom) / sides.float32
+    hstep = stroke / 2.0 / cos(space / 2.0)
+    r1 = radius - hstep
+    r2 = radius + hstep
+  
+  arcRadius(pos, sides, angleFrom, angleTo, r1, r2, rotation, color, z)
+
+proc crescent*(pos: Vec2, sides: int, angleFrom, angleTo: float32, radius: float32, rotation = 0f, stroke = 1f.px, color = colorWhite, z = 0f) =
+  let 
+    space = (angleTo - angleFrom) / sides.float32
+  
+  for i in 0..<sides:
+    let 
+      hstep = stroke / 2.0 / cos(space / 2.0) * (i / sides).slope
+      r1 = radius - hstep
+      r2 = radius + hstep
+
+      a = space * i.float32 + rotation + angleFrom
       cosf = cos(a)
       sinf = sin(a)
       cos2f = cos(a + space)
